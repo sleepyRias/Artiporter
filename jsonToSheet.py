@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import pandas as pd
 from pathlib import Path
+import openpyxl
 
 def main():
     def browse_file():
@@ -26,9 +27,24 @@ def main():
                 messagebox.showerror("Fehler", "Keine 'artifacts' im JSON gefunden!")
                 return
 
-            rows = []
+            # Artefakte-Tabelle: Jede sec_effect als eigene Zeile, inkl. unit_id
+            artifact_rows = []
+            # Mapping von rid zu unit_id (Artefakt-IDs können Dicts sein)
+            unit_id_map = {}
+            for mon in data.get("unit_list", []):
+                if mon.get("artifacts"):
+                    for arti in mon["artifacts"]:
+                        # Falls arti ein Dict ist, hole die rid
+                        if isinstance(arti, dict):
+                            rid = arti.get("rid")
+                        else:
+                            rid = arti
+                        unit_id_map[rid] = mon.get("unit_id")
+
             for art in artifacts:
                 row = {
+                    "rid" : art.get("rid"),
+                    "occupied_id" : art.get("occupied_id"),
                     "type": art.get("type"),
                     "attribute": art.get("attribute", "type"),
                     "unit_style": art.get("unit_style"),
@@ -56,14 +72,58 @@ def main():
                     "date_add": art.get("date_add"),
                     "date_mod": art.get("date_mod"),
                 }
-                rows.append(row)
+                artifact_rows.append(row)
 
-            df = pd.DataFrame(rows)
+            artifact_df = pd.DataFrame(artifact_rows)
+            # Monster-Tabelle: Jede Unit-Artefakt-Kombination als eigene Zeile
+            monster = data.get("unit_list", [])
+            monster_rows = []
+            if not monster:
+                messagebox.showerror("Fehler", "Keine 'monsterlist' im JSON gefunden!")
+                return
+            for mon in monster:
+                if mon.get("artifacts"):
+                    for arti in mon.get("artifacts"): #die Artefakte links und rechts
+                        row = {
+                            "rid" : arti.get("rid"),
+                            "occupied_id" : arti.get("occupied_id"),
+                            "type": arti.get("type"),
+                            "attribute": arti.get("attribute", "type"),
+                            "unit_style": arti.get("unit_style"),
+                            "natural_rank": arti.get("natural_rank"),
+                            "pri_effect": arti.get("pri_effect"),
+                            #stat1
+                            "stat1":        arti.get("sec_effects", [[None]*5]*4)[0][0] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat1roll":    arti.get("sec_effects", [[None]*5]*4)[0][1] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat1crafted": arti.get("sec_effects", [[None]*5]*4)[0][3] if len(arti.get("sec_effects", [])) > 0 and len(arti.get("sec_effects", [[None]*5]*4)[0]) > 2 else None,
+                            #stat2
+                            "stat2":        arti.get("sec_effects", [[None]*5]*4)[1][0] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat2roll":    arti.get("sec_effects", [[None]*5]*4)[1][1] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat2crafted": arti.get("sec_effects", [[None]*5]*4)[1][3] if len(arti.get("sec_effects", [])) > 1 and len(arti.get("sec_effects", [[None]*5]*4)[1]) > 2 else None,
+                            #stat3
+                            "stat3":        arti.get("sec_effects", [[None]*5]*4)[2][0] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat3roll":    arti.get("sec_effects", [[None]*5]*4)[2][1] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat3crafted": arti.get("sec_effects", [[None]*5]*4)[2][3] if len(arti.get("sec_effects", [])) > 2 and len(arti.get("sec_effects", [[None]*5]*4)[2]) > 2 else None,
+                            #stat4
+                            "stat4":        arti.get("sec_effects", [[None]*5]*4)[3][0] if arti.get("sec_effects", [[None]*5]*4)[1] else None,
+                            "stat4roll":    arti.get("sec_effects", [[None]*5]*4)[3][1] if arti.get("sec_effects", [[None]*5]*4)[0] else None,
+                            "stat4crafted": arti.get("sec_effects", [[None]*5]*4)[3][3] if len(arti.get("sec_effects", [])) > 3 and len(arti.get("sec_effects", [[None]*5]*4)[3]) > 2 else None,
+
+                            "category": arti.get("locked"),
+                            "extra": str(arti.get("extra")),
+                            "date_add": arti.get("date_add"),
+                            "date_mod": arti.get("date_mod"),
+                        }
+                        monster_rows.append(row)
+            monster_df = pd.DataFrame(monster_rows)
 
             # statXroll-Spalten als float definieren
             for col in ["stat1roll", "stat2roll", "stat3roll", "stat4roll"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                if col in artifact_df.columns:
+                    artifact_df[col] = pd.to_numeric(artifact_df[col], errors="coerce")
+            for col in ["stat1roll", "stat2roll", "stat3roll", "stat4roll"]:
+                if col in monster_df.columns:
+                    monster_df[col] = pd.to_numeric(monster_df[col], errors="coerce")
 
             def attribute_type_mapper(row):
                 try:
@@ -92,10 +152,13 @@ def main():
                 except Exception:
                     return "Unbekannt"
 
-            df["attribute"] = df.apply(attribute_type_mapper, axis=1)
+            artifact_df["attribute"] = artifact_df.apply(attribute_type_mapper, axis=1)
+            monster_df["attribute"] = monster_df.apply(attribute_type_mapper, axis=1)
             # Entferne die Hilfsspalte unit_style nach Verarbeitung
-            if "unit_style" in df.columns:
-                df.drop(columns=["unit_style"], inplace=True)
+            if "unit_style" in artifact_df.columns:
+                artifact_df.drop(columns=["unit_style"], inplace=True)
+            if "unit_style" in monster_df.columns:
+                monster_df.drop(columns=["unit_style"], inplace=True)
 
             def type_mapper(x):
                 try:
@@ -205,17 +268,44 @@ def main():
             }
 
             for col, func in column_map.items():
-                if col in df.columns:
-                    df[col] = df[col].apply(func)
+                if col in artifact_df.columns:
+                    artifact_df[col] = artifact_df[col].apply(func)
+            for col, func in column_map.items():
+                if col in monster_df.columns:
+                    monster_df[col] = monster_df[col].apply(func)
 
+            # Excel speichern
             save_path = filedialog.asksaveasfilename(
-                title="Speichere Artefakte als CSV",
-                defaultextension=".csv",
-                filetypes=[("CSV Datei", "*.csv"), ("Alle Dateien", "*.*")]
+                title="Speichere als Excel",
+                defaultextension=".xlsx",
+                filetypes=[("Excel Datei", "*.xlsx"), ("Alle Dateien", "*.*")]
             )
             if save_path:
-                df.to_csv(save_path, index=False, float_format="%.1f", decimal=",")
-                messagebox.showinfo("Erfolg", f"Artefakte gespeichert unter:\n{save_path}")
+                with pd.ExcelWriter(save_path, engine="openpyxl") as writer:
+                    artifact_df.to_excel(writer, sheet_name="Artefakte", index=False)
+                    monster_df.to_excel(writer, sheet_name="Monster", index=False)
+                # Nach dem Schreiben: Format und Spaltenbreite anpassen
+                import openpyxl
+                wb = openpyxl.load_workbook(save_path)
+                # Definiere feste Spaltenbreiten
+                custom_widths = {
+                    "A": 12, "I": 12, "L": 12, "O": 12, "R": 12,
+                    "B": 14, "E": 14,
+                    "G": 50, "J": 50, "M": 50, "P": 50,
+                    "U": 20, "V": 20
+                }
+                for sheet_name in ["Artefakte", "Monster"]:
+                    ws = wb[sheet_name]
+                    for col_letter, width in custom_widths.items():
+                        ws.column_dimensions[col_letter].width = width
+                    # Zahlenformat für rid und occupied_id
+                    for col in ws.iter_cols(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                        header = ws.cell(row=1, column=col[0].column).value
+                        if header in ["rid", "occupied_id"]:
+                            for cell in col:
+                                cell.number_format = '0'
+                wb.save(save_path)
+                messagebox.showinfo("Erfolg", f"Datei gespeichert unter:\n{save_path}")
         except Exception as e:
             messagebox.showerror("Fehler beim Export", str(e))
 
